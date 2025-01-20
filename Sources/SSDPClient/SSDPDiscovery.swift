@@ -120,7 +120,13 @@ public class SSDPDiscovery {
                         "HOST: \(multicastAddr):\(port)\r\n" +
                         "ST: \(searchTarget)\r\n" +
                         "MX: \(Int(duration))\r\n\r\n"
-                    try socket.write(from: message, to: Socket.createAddress(for: multicastAddr, on: port)!)
+                    guard let multicastAddress = Socket.createAddress(for: multicastAddr, on: port) else {
+                        assert(false)
+                        Log.info("Socket address error: interface \(interface ?? "default")")
+                        socket.close()
+                        continue
+                    }
+                    try socket.write(from: message, to: multicastAddress)
                     self.sockets.append(socket)
                 }
             } catch let error {
