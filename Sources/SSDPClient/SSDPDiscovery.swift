@@ -38,13 +38,6 @@ public class SSDPDiscovery {
 
     /// Delegate for service discovery
     public var delegate: SSDPDiscoveryDelegate?
-
-    /// The client is discovering
-    public var isDiscovering: Bool {
-        get {
-            return self.sockets.count > 0
-        }
-    }
     
     // MARK: Initialisation
 
@@ -59,8 +52,8 @@ public class SSDPDiscovery {
     // MARK: Private functions
 
     /// Read responses.
-    private func readResponses() {
-        for socket in self.sockets {
+    private func readResponses(sockets: [Socket]) {
+        for socket in sockets {
             do {
                 var data = Data()
                 let (bytesRead, address) = try socket.readDatagram(into: &data)
@@ -74,30 +67,18 @@ public class SSDPDiscovery {
 
             } catch let error {
                 Log.error("Socket error: \(error)")
-                self.forceStop()
-                self.delegate?.ssdpDiscovery(self, didFinishWithError: error)
+                DispatchQueue.main.async {
+                    self._stop()
+                    self.delegate?.ssdpDiscovery(self, didFinishWithError: error)
+                }
             }
-        }
-    }
-
-    /// Read responses with timeout.
-    private func readResponses(forDuration duration: TimeInterval) {
-        let queue = DispatchQueue.global()
-
-        queue.async() {
-            while self.isDiscovering {
-                self.readResponses()
-            }
-        }
-
-        queue.asyncAfter(deadline: .now() + duration) { [unowned self] in
-            self.stop()
         }
     }
 
     /// Force stop discovery closing the socket.
-    private func forceStop() {
-        while self.isDiscovering {
+    private func _stop() {
+        assert(Thread.current.isMainThread) // sockets access on main thread
+        while self.sockets.count > 0 {
             self.sockets.removeLast().close()
         }
     }
@@ -112,6 +93,7 @@ public class SSDPDiscovery {
     */
     open func discoverService(forDuration duration: TimeInterval = 10, searchTarget: String = "ssdp:all", port: Int32 = 1900, onInterfaces:[String?] = [nil]) {
         Log.info("Start SSDP discovery for \(Int(duration)) duration...")
+        assert(Thread.current.isMainThread) // sockets access on main thread
         self.delegate?.ssdpDiscoveryDidStart(self)
 
         for interface in onInterfaces {
@@ -150,20 +132,27 @@ public class SSDPDiscovery {
             }
         }
 
-        if !self.isDiscovering {    // Might we run into a race condition here?
-            //Log.info("Failed SSDP discovery")
+        let sockets = self.sockets
+        if sockets.count == 0 {
+            Log.info("discoverService: no sockets, no-op")
             self.delegate?.ssdpDiscoveryDidFinish(self)
-        } else {
-            self.readResponses(forDuration: duration)
+            assert(false)
+            return
+        }
+
+        DispatchQueue.global().async() {
+            self.readResponses(sockets: sockets)
+        }
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + duration) { [weak self] in
+            self?.stop()
         }
     }
     
     /// Stop the discovery before the timeout.
     open func stop() {
-        if self.isDiscovering {
-            Log.info("Stop SSDP discovery")
-            self.forceStop()
-            self.delegate?.ssdpDiscoveryDidFinish(self)
-        }
+        Log.info("Stop SSDP discovery")
+        self._stop()
+        self.delegate?.ssdpDiscoveryDidFinish(self)
     }
 }
