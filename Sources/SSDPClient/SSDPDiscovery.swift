@@ -112,23 +112,25 @@ public class SSDPDiscovery {
                         family = .inet
                 }
                 socket = try Socket.create(family: family, type: .datagram, proto: .udp)
-                if let socket = socket {
-                    try socket.listen(on: 0, node: interface)   // node:nil means the default interface, for all others it should be the interface's IP address
-                    // Use Multicast (Caution: Gets blocked by iOS 16 unless the app has the multicast entitlement!)
-                    let message = "M-SEARCH * HTTP/1.1\r\n" +
-                        "MAN: \"ssdp:discover\"\r\n" +
-                        "HOST: \(multicastAddr):\(port)\r\n" +
-                        "ST: \(searchTarget)\r\n" +
-                        "MX: \(Int(duration))\r\n\r\n"
-                    guard let multicastAddress = Socket.createAddress(for: multicastAddr, on: port) else {
-                        assert(false)
-                        Log.info("Socket address error: interface \(interface ?? "default")")
-                        socket.close()
-                        continue
-                    }
-                    try socket.write(from: message, to: multicastAddress)
-                    self.sockets.append(socket)
+                guard let socket = socket else {
+                    continue
                 }
+                try socket.listen(on: 0, node: interface)   // node:nil means the default interface, for all others it should be the interface's IP address
+
+                // Use Multicast (Caution: Gets blocked by iOS 16 unless the app has the multicast entitlement!)
+                let message = "M-SEARCH * HTTP/1.1\r\n" +
+                    "MAN: \"ssdp:discover\"\r\n" +
+                    "HOST: \(multicastAddr):\(port)\r\n" +
+                    "ST: \(searchTarget)\r\n" +
+                    "MX: \(Int(duration))\r\n\r\n"
+                guard let multicastAddress = Socket.createAddress(for: multicastAddr, on: port) else {
+                    assert(false)
+                    Log.info("Socket address error: interface \(interface ?? "default")")
+                    socket.close()
+                    continue
+                }
+                try socket.write(from: message, to: multicastAddress)
+                self.sockets.append(socket)
             } catch let error {
                 // We ignore errors here because we get "-9980(0x-26FC), No route to host" if we're not allowed to multicast, and that's difficult to foresee.
                 // Also, with multiple interfaces, some may fail, and we need to ignore that, too, or it gets too difficult to handle for the caller
