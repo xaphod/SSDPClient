@@ -57,16 +57,27 @@ public class SSDPDiscovery {
             do {
                 var data = Data()
                 let (bytesRead, address) = try socket.readDatagram(into: &data)
+                guard
+                    let address = address,
+                    let (remoteHost, _) = Socket.hostnameAndPort(from: address)
+                else {
+                    assert(false)
+                    Log.error("SSDPDiscovery readResponses: no address or remoteHost")
+                    continue
+                }
 
                 if bytesRead > 0 {
                     let response = String(data: data, encoding: .utf8)
-                    let (remoteHost, _) = Socket.hostnameAndPort(from: address!)!
-                    Log.debug("Received: \(response!) from \(remoteHost)")
-                    self.delegate?.ssdpDiscovery(self, didDiscoverService: SSDPService(host: remoteHost, response: response!))
+                    if let response = response {
+                        Log.debug("SSDPDiscovery Received: \(response) from \(remoteHost)")
+                        self.delegate?.ssdpDiscovery(self, didDiscoverService: SSDPService(host: remoteHost, response: response))
+                    }
+                } else {
+                    Log.debug("SSDPDiscovery Received: nothing from \(remoteHost)")
                 }
 
             } catch let error {
-                Log.error("Socket error: \(error)")
+                Log.error("SSDPDiscovery Socket error: \(error)")
                 DispatchQueue.main.async {
                     self._stop()
                     self.delegate?.ssdpDiscovery(self, didFinishWithError: error)
@@ -92,7 +103,7 @@ public class SSDPDiscovery {
             - searchTarget: The type of the searched service.
     */
     open func discoverService(forDuration duration: TimeInterval = 10, searchTarget: String = "ssdp:all", port: Int32 = 1900, onInterfaces:[String?] = [nil]) {
-        Log.info("Start SSDP discovery for \(Int(duration)) duration...")
+        Log.info("SSDPDiscovery: Start SSDP discovery for \(Int(duration)) duration...")
         assert(Thread.current.isMainThread) // sockets access on main thread
         self.delegate?.ssdpDiscoveryDidStart(self)
 
@@ -125,7 +136,7 @@ public class SSDPDiscovery {
                     "MX: \(Int(duration))\r\n\r\n"
                 guard let multicastAddress = Socket.createAddress(for: multicastAddr, on: port) else {
                     assert(false)
-                    Log.info("Socket address error: interface \(interface ?? "default")")
+                    Log.info("SSDPDiscovery Socket address error: interface \(interface ?? "default")")
                     socket.close()
                     continue
                 }
@@ -136,13 +147,13 @@ public class SSDPDiscovery {
                 // Also, with multiple interfaces, some may fail, and we need to ignore that, too, or it gets too difficult to handle for the caller
                 // to sort out which work and which don't.
                 socket?.close();
-                Log.info("Socket error: \(error) on interface \(interface ?? "default")")
+                Log.info("SSDPDiscovery Socket error: \(error) on interface \(interface ?? "default")")
             }
         }
 
         let sockets = self.sockets
         if sockets.count == 0 {
-            Log.info("discoverService: no sockets, no-op")
+            Log.info("SSDPDiscovery discoverService: no sockets, no-op")
             self.delegate?.ssdpDiscoveryDidFinish(self)
             assert(false)
             return
@@ -159,7 +170,7 @@ public class SSDPDiscovery {
     
     /// Stop the discovery before the timeout.
     open func stop() {
-        Log.info("Stop SSDP discovery")
+        Log.info("SSDPDiscovery: Stop SSDP discovery")
         self._stop()
         self.delegate?.ssdpDiscoveryDidFinish(self)
     }
