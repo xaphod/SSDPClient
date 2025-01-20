@@ -105,6 +105,7 @@ public class SSDPDiscovery {
     open func discoverService(forDuration duration: TimeInterval = 10, searchTarget: String = "ssdp:all", port: Int32 = 1900, onInterfaces:[String?] = [nil]) {
         Log.info("SSDPDiscovery: Start SSDP discovery for \(Int(duration)) duration...")
         assert(Thread.current.isMainThread) // sockets access on main thread
+        self._stop()
         self.delegate?.ssdpDiscoveryDidStart(self)
 
         for interface in onInterfaces {
