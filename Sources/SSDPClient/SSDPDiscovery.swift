@@ -17,7 +17,7 @@ public protocol SSDPDiscoveryDelegate {
     func ssdpDiscoveryDidStart(_ discovery: SSDPDiscovery)
 
     /// Tells the delegate that the discovery has finished.
-    func ssdpDiscoveryDidFinish(_ discovery: SSDPDiscovery)
+    func ssdpDiscoveryDidFinish(_ discovery: SSDPDiscovery, probablyShowingIOSPermissionDialog: Bool)
 }
 
 public extension SSDPDiscoveryDelegate {
@@ -27,7 +27,7 @@ public extension SSDPDiscoveryDelegate {
 
     func ssdpDiscoveryDidStart(_ discovery: SSDPDiscovery) {}
 
-    func ssdpDiscoveryDidFinish(_ discovery: SSDPDiscovery) {}
+    func ssdpDiscoveryDidFinish(_ discovery: SSDPDiscovery, probablyShowingIOSPermissionDialog: Bool) {}
 }
 
 /// SSDP discovery for UPnP devices on the LAN
@@ -154,9 +154,9 @@ public class SSDPDiscovery {
 
         let sockets = self.sockets
         if sockets.count == 0 {
+            // NOTE: this is what gets hit when "Allow appname to find devices on local networks?" iOS popup is showing (user has not made a choice yet).
             Log.info("SSDPDiscovery discoverService: no sockets, no-op")
-            self.delegate?.ssdpDiscoveryDidFinish(self)
-            assert(false)
+            self.delegate?.ssdpDiscoveryDidFinish(self, probablyShowingIOSPermissionDialog: true)
             return
         }
 
@@ -173,6 +173,6 @@ public class SSDPDiscovery {
     open func stop() {
         Log.info("SSDPDiscovery: Stop SSDP discovery")
         self._stop()
-        self.delegate?.ssdpDiscoveryDidFinish(self)
+        self.delegate?.ssdpDiscoveryDidFinish(self, probablyShowingIOSPermissionDialog: false)
     }
 }
