@@ -7,23 +7,18 @@ import Socket
 
 /// Delegate for service discovery
 public protocol SSDPDiscoveryDelegate {
-    /// Tells the delegate a requested service has been discovered.
+    /// Tells the delegate a requested service has been discovered. Not on the main thread.
     func ssdpDiscovery(_ discovery: SSDPDiscovery, didDiscoverService service: SSDPService)
 
-    /// Tells the delegate that the discovery ended due to an error.
-    func ssdpDiscovery(_ discovery: SSDPDiscovery, didFinishWithError error: Error)
-
-    /// Tells the delegate that the discovery has started.
+    /// Tells the delegate that the discovery has started. Always on the main thread.
     func ssdpDiscoveryDidStart(_ discovery: SSDPDiscovery)
 
-    /// Tells the delegate that the discovery has finished.
+    /// Tells the delegate that the discovery has finished.  Always on the main thread.
     func ssdpDiscoveryDidFinish(_ discovery: SSDPDiscovery, probablyShowingIOSPermissionDialog: Bool)
 }
 
 public extension SSDPDiscoveryDelegate {
     func ssdpDiscovery(_ discovery: SSDPDiscovery, didDiscoverService service: SSDPService) {}
-
-    func ssdpDiscovery(_ discovery: SSDPDiscovery, didFinishWithError error: Error) {}
 
     func ssdpDiscoveryDidStart(_ discovery: SSDPDiscovery) {}
 
@@ -32,6 +27,7 @@ public extension SSDPDiscoveryDelegate {
 
 /// SSDP discovery for UPnP devices on the LAN
 public class SSDPDiscovery {
+    private let queue = DispatchQueue.init(label: "SSDPDiscovery")
 
     /// The UDP socket
     private var sockets: [Socket] = []
@@ -77,11 +73,7 @@ public class SSDPDiscovery {
                 }
 
             } catch let error {
-                Log.error("SSDPDiscovery Socket error: \(error)")
-                DispatchQueue.main.async {
-                    self._stop()
-                    self.delegate?.ssdpDiscovery(self, didFinishWithError: error)
-                }
+                Log.error("SSDPDiscovery Socket error during read: \(error)")
             }
         }
     }
@@ -108,64 +100,73 @@ public class SSDPDiscovery {
         self._stop()
         self.delegate?.ssdpDiscoveryDidStart(self)
 
-        for interface in onInterfaces {
-            var socket: Socket? = nil
-            do {
-                // Determine the multicase address based on the interface's address type (ipv4 vs ipv6)
-                let interfaceAddr = Socket.createAddress(for: interface ?? "127.0.0.1", on: 0)
-                let multicastAddr: String
-                let family: Socket.ProtocolFamily
-                switch interfaceAddr {
+        self.queue.async {
+            var sockets = [Socket]()
+            
+            for interface in onInterfaces {
+                var socket: Socket? = nil
+                do {
+                    // Determine the multicase address based on the interface's address type (ipv4 vs ipv6)
+                    let interfaceAddr = Socket.createAddress(for: interface ?? "127.0.0.1", on: 0)
+                    let multicastAddr: String
+                    let family: Socket.ProtocolFamily
+                    switch interfaceAddr {
                     case .ipv6?:
                         multicastAddr = "ff02::c"   // use "ff02::c" for "link-local" or "ff05::c" for "site-local"
                         family = .inet6
                     default:
                         multicastAddr = "239.255.255.250"
                         family = .inet
-                }
-                socket = try Socket.create(family: family, type: .datagram, proto: .udp)
-                guard let socket = socket else {
-                    continue
-                }
-                try socket.listen(on: 0, node: interface)   // node:nil means the default interface, for all others it should be the interface's IP address
-
-                // Use Multicast (Caution: Gets blocked by iOS 16 unless the app has the multicast entitlement!)
-                let message = "M-SEARCH * HTTP/1.1\r\n" +
+                    }
+                    socket = try Socket.create(family: family, type: .datagram, proto: .udp)
+                    guard let socket = socket else {
+                        continue
+                    }
+                    try socket.listen(on: 0, node: interface)   // node:nil means the default interface, for all others it should be the interface's IP address
+                    
+                    // Use Multicast (Caution: Gets blocked by iOS 16 unless the app has the multicast entitlement!)
+                    let message = "M-SEARCH * HTTP/1.1\r\n" +
                     "MAN: \"ssdp:discover\"\r\n" +
                     "HOST: \(multicastAddr):\(port)\r\n" +
                     "ST: \(searchTarget)\r\n" +
                     "MX: \(Int(duration))\r\n\r\n"
-                guard let multicastAddress = Socket.createAddress(for: multicastAddr, on: port) else {
-                    assert(false)
-                    Log.info("SSDPDiscovery Socket address error: interface \(interface ?? "default")")
-                    socket.close()
-                    continue
+                    guard let multicastAddress = Socket.createAddress(for: multicastAddr, on: port) else {
+                        assert(false)
+                        Log.info("SSDPDiscovery Socket address error: interface \(interface ?? "default")")
+                        socket.close()
+                        continue
+                    }
+                    try socket.write(from: message, to: multicastAddress)
+                    sockets.append(socket)
+                } catch let error {
+                    // We ignore errors here because we get "-9980(0x-26FC), No route to host" if we're not allowed to multicast, and that's difficult to foresee.
+                    // Also, with multiple interfaces, some may fail, and we need to ignore that, too, or it gets too difficult to handle for the caller
+                    // to sort out which work and which don't.
+                    socket?.close();
+                    Log.info("SSDPDiscovery Socket error during setup: \(error) on interface \(interface ?? "default")")
                 }
-                try socket.write(from: message, to: multicastAddress)
-                self.sockets.append(socket)
-            } catch let error {
-                // We ignore errors here because we get "-9980(0x-26FC), No route to host" if we're not allowed to multicast, and that's difficult to foresee.
-                // Also, with multiple interfaces, some may fail, and we need to ignore that, too, or it gets too difficult to handle for the caller
-                // to sort out which work and which don't.
-                socket?.close();
-                Log.info("SSDPDiscovery Socket error: \(error) on interface \(interface ?? "default")")
+            } // end: for
+            
+            if sockets.count == 0 {
+                // NOTE: this is what gets hit when "Allow appname to find devices on local networks?" iOS popup is showing (user has not made a choice yet).
+                Log.info("SSDPDiscovery discoverService: no sockets, no-op")
+                DispatchQueue.main.async {
+                    self.delegate?.ssdpDiscoveryDidFinish(self, probablyShowingIOSPermissionDialog: true)
+                }
+                return
             }
-        }
-
-        let sockets = self.sockets
-        if sockets.count == 0 {
-            // NOTE: this is what gets hit when "Allow appname to find devices on local networks?" iOS popup is showing (user has not made a choice yet).
-            Log.info("SSDPDiscovery discoverService: no sockets, no-op")
-            self.delegate?.ssdpDiscoveryDidFinish(self, probablyShowingIOSPermissionDialog: true)
-            return
-        }
-
-        DispatchQueue.global().async() {
-            self.readResponses(sockets: sockets)
-        }
-
-        DispatchQueue.main.asyncAfter(deadline: .now() + duration) { [weak self] in
-            self?.stop()
+            
+            DispatchQueue.main.async { // self.sockets is always read/written on main thread (avoids race conditions)
+                self.sockets = sockets
+            }
+            
+            DispatchQueue.global().async() { // read on concurrent queue, as this can block
+                self.readResponses(sockets: sockets)
+            }
+            
+            DispatchQueue.main.asyncAfter(deadline: .now() + duration) { [weak self] in
+                self?.stop()
+            }
         }
     }
     
