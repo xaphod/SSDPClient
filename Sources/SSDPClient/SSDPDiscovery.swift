@@ -1,7 +1,13 @@
 import Foundation
-import HeliumLogger
-import LoggerAPI
 import Socket
+
+// MARK: Logging
+
+public struct SSDPDiscoveryLog {
+    public static var debug: (String)->Void = { NSLog($0) }
+    public static var info: (String)->Void = { NSLog($0) }
+    public static var error: (String)->Void = { NSLog($0) }
+}
 
 // MARK: Protocols
 
@@ -37,9 +43,7 @@ public class SSDPDiscovery {
     
     // MARK: Initialisation
 
-    public init() {
-        HeliumLogger.use()
-    }
+    public init() {}
 
     deinit {
         self.stop()
@@ -48,33 +52,33 @@ public class SSDPDiscovery {
     // MARK: Private functions
 
     /// Read responses.
-    private func readResponses(sockets: [Socket]) {
-        for socket in sockets {
-            do {
-                var data = Data()
-                let (bytesRead, address) = try socket.readDatagram(into: &data)
-                guard
-                    let address = address,
-                    let (remoteHost, _) = Socket.hostnameAndPort(from: address)
-                else {
-                    assert(false)
-                    Log.error("SSDPDiscovery readResponses: no address or remoteHost")
-                    continue
-                }
-
-                if bytesRead > 0 {
-                    let response = String(data: data, encoding: .utf8)
-                    if let response = response {
-                        Log.debug("SSDPDiscovery Received: \(response) from \(remoteHost)")
-                        self.delegate?.ssdpDiscovery(self, didDiscoverService: SSDPService(host: remoteHost, response: response))
-                    }
-                } else {
-                    Log.debug("SSDPDiscovery Received: nothing from \(remoteHost)")
-                }
-
-            } catch let error {
-                Log.error("SSDPDiscovery Socket error during read: \(error)")
+    private func readResponses(socket: Socket) {
+        do {
+            var data = Data()
+            let (bytesRead, address) = try socket.readDatagram(into: &data)
+            guard
+                let address = address,
+                let (remoteHost, _) = Socket.hostnameAndPort(from: address)
+            else {
+                assert(false)
+                SSDPDiscoveryLog.error("SSDPDiscovery readResponses: no address or remoteHost")
+                return
             }
+
+            if bytesRead > 0 {
+                let response = String(data: data, encoding: .utf8)
+                if let response = response {
+                    SSDPDiscoveryLog.debug("SSDPDiscovery Received: \(response) from \(remoteHost)")
+                    self.delegate?.ssdpDiscovery(self, didDiscoverService: SSDPService(host: remoteHost, response: response))
+                } else {
+                    SSDPDiscoveryLog.debug("SSDPDiscovery Received: got \(bytesRead) bytes but could not make utf8 string, host=\(remoteHost)")
+                }
+            } else {
+                SSDPDiscoveryLog.debug("SSDPDiscovery Received: nothing from \(remoteHost)")
+            }
+
+        } catch let error {
+            SSDPDiscoveryLog.error("SSDPDiscovery Socket error during read: \(error)")
         }
     }
 
@@ -95,7 +99,8 @@ public class SSDPDiscovery {
             - searchTarget: The type of the searched service.
     */
     open func discoverService(forDuration duration: TimeInterval = 10, searchTarget: String = "ssdp:all", port: Int32 = 1900, onInterfaces:[String?] = [nil]) {
-        Log.info("SSDPDiscovery: Start SSDP discovery for \(Int(duration)) duration...")
+        let index = onInterfaces.firstIndex(where: { $0?.hasPrefix("192.") ?? false })
+        SSDPDiscoveryLog.info("SSDPDiscovery: Start SSDP discovery for \(Int(duration)) duration, pos of element with 192. = \(index ?? -1)")
         assert(Thread.current.isMainThread) // sockets access on main thread
         self._stop()
         self.delegate?.ssdpDiscoveryDidStart(self)
@@ -132,7 +137,7 @@ public class SSDPDiscovery {
                     "MX: \(Int(duration))\r\n\r\n"
                     guard let multicastAddress = Socket.createAddress(for: multicastAddr, on: port) else {
                         assert(false)
-                        Log.info("SSDPDiscovery Socket address error: interface \(interface ?? "default")")
+                        SSDPDiscoveryLog.info("SSDPDiscovery Socket address error: interface \(interface ?? "default")")
                         socket.close()
                         continue
                     }
@@ -143,13 +148,13 @@ public class SSDPDiscovery {
                     // Also, with multiple interfaces, some may fail, and we need to ignore that, too, or it gets too difficult to handle for the caller
                     // to sort out which work and which don't.
                     socket?.close();
-                    Log.info("SSDPDiscovery Socket error during setup: \(error) on interface \(interface ?? "default")")
+                    SSDPDiscoveryLog.info("SSDPDiscovery Socket error during setup: \(error) on interface \(interface ?? "default")")
                 }
             } // end: for
             
             if sockets.count == 0 {
                 // NOTE: this is what gets hit when "Allow appname to find devices on local networks?" iOS popup is showing (user has not made a choice yet).
-                Log.info("SSDPDiscovery discoverService: no sockets, no-op")
+                SSDPDiscoveryLog.info("SSDPDiscovery discoverService: no sockets, no-op")
                 DispatchQueue.main.async {
                     self.delegate?.ssdpDiscoveryDidFinish(self, probablyShowingIOSPermissionDialog: true)
                 }
@@ -160,8 +165,10 @@ public class SSDPDiscovery {
                 self.sockets = sockets
             }
             
-            DispatchQueue.global().async() { // read on concurrent queue, as this can block
-                self.readResponses(sockets: sockets)
+            for socket in sockets {
+                DispatchQueue.global().async() { // read on concurrent queue, as this can block
+                    self.readResponses(socket: socket)
+                }
             }
             
             DispatchQueue.main.asyncAfter(deadline: .now() + duration) { [weak self] in
@@ -172,7 +179,7 @@ public class SSDPDiscovery {
     
     /// Stop the discovery before the timeout.
     open func stop() {
-        Log.info("SSDPDiscovery: Stop SSDP discovery")
+        SSDPDiscoveryLog.info("SSDPDiscovery: Stop SSDP discovery")
         self._stop()
         self.delegate?.ssdpDiscoveryDidFinish(self, probablyShowingIOSPermissionDialog: false)
     }
