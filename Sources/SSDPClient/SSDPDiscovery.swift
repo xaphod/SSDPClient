@@ -68,7 +68,7 @@ public class SSDPDiscovery {
             if bytesRead > 0 {
                 let response = String(data: data, encoding: .utf8)
                 if let response = response {
-                    SSDPDiscoveryLog.debug("SSDPDiscovery Received: \(response) from \(remoteHost)")
+                    SSDPDiscoveryLog.debug("SSDPDiscovery Received from \(remoteHost): \(response.replacingOccurrences(of: "\n", with: "\\n"))")
                     self.delegate?.ssdpDiscovery(self, didDiscoverService: SSDPService(host: remoteHost, response: response))
                 } else {
                     SSDPDiscoveryLog.debug("SSDPDiscovery Received: got \(bytesRead) bytes but could not make utf8 string, host=\(remoteHost)")
@@ -99,8 +99,6 @@ public class SSDPDiscovery {
             - searchTarget: The type of the searched service.
     */
     open func discoverService(forDuration duration: TimeInterval = 10, searchTarget: String = "ssdp:all", port: Int32 = 1900, onInterfaces:[String?] = [nil]) {
-        let index = onInterfaces.firstIndex(where: { $0?.hasPrefix("192.") ?? false })
-        SSDPDiscoveryLog.info("SSDPDiscovery: Start SSDP discovery for \(Int(duration)) duration, pos of element with 192. = \(index ?? -1)")
         assert(Thread.current.isMainThread) // sockets access on main thread
         self._stop()
         self.delegate?.ssdpDiscoveryDidStart(self)
