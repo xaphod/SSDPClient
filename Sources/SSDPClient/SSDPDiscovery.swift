@@ -132,7 +132,7 @@ public class SSDPDiscovery {
                     "MAN: \"ssdp:discover\"\r\n" +
                     "HOST: \(multicastAddr):\(port)\r\n" +
                     "ST: \(searchTarget)\r\n" +
-                    "MX: \(Int(duration))\r\n\r\n"
+                    "MX: \(min(3, Int(duration ?? 3)))\r\n\r\n" // "thundering herd" prevention: max time devices can wait to respond
                     guard let multicastAddress = Socket.createAddress(for: multicastAddr, on: port) else {
                         assert(false)
                         SSDPDiscoveryLog.info("SSDPDiscovery Socket address error: interface \(interface ?? "default")")
