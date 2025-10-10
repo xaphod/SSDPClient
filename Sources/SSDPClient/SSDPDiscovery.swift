@@ -98,16 +98,21 @@ public class SSDPDiscovery {
             - duration: The amount of time to wait.
             - searchTarget: The type of the searched service.
     */
-    open func discoverService(forDuration duration: TimeInterval = 10, searchTarget: String = "ssdp:all", port: Int32 = 1900, onInterfaces:[String?] = [nil]) {
+    open func discoverService(forDuration duration: TimeInterval?, searchTarget: String = "ssdp:all", port: Int32 = 1900, onInterfaces:[String?] = [nil]) {
         assert(Thread.current.isMainThread) // sockets access on main thread
         self._stop()
         self.delegate?.ssdpDiscoveryDidStart(self)
+        
+        var writeBlocks: [() -> Void] = []
 
         self.queue.async {
             var sockets = [Socket]()
             
             for interface in onInterfaces {
                 var socket: Socket? = nil
+                var message: String?
+                var multicastAddress: Socket.Address?
+
                 do {
                     // Determine the multicase address based on the interface's address type (ipv4 vs ipv6)
                     let interfaceAddr = Socket.createAddress(for: interface ?? "127.0.0.1", on: 0)
@@ -128,19 +133,18 @@ public class SSDPDiscovery {
                     try socket.listen(on: 0, node: interface)   // node:nil means the default interface, for all others it should be the interface's IP address
                     
                     // Use Multicast (Caution: Gets blocked by iOS 16 unless the app has the multicast entitlement!)
-                    let message = "M-SEARCH * HTTP/1.1\r\n" +
+                    message = "M-SEARCH * HTTP/1.1\r\n" +
                     "MAN: \"ssdp:discover\"\r\n" +
                     "HOST: \(multicastAddr):\(port)\r\n" +
                     "ST: \(searchTarget)\r\n" +
                     "MX: \(min(3, Int(duration ?? 3)))\r\n\r\n" // "thundering herd" prevention: max time devices can wait to respond
-                    guard let multicastAddress = Socket.createAddress(for: multicastAddr, on: port) else {
+                    guard let mAddress = Socket.createAddress(for: multicastAddr, on: port) else {
                         assert(false)
                         SSDPDiscoveryLog.info("SSDPDiscovery Socket address error: interface \(interface ?? "default")")
                         socket.close()
                         continue
                     }
-                    try socket.write(from: message, to: multicastAddress)
-                    sockets.append(socket)
+                    multicastAddress = mAddress
                 } catch let error {
                     // We ignore errors here because we get "-9980(0x-26FC), No route to host" if we're not allowed to multicast, and that's difficult to foresee.
                     // Also, with multiple interfaces, some may fail, and we need to ignore that, too, or it gets too difficult to handle for the caller
@@ -148,9 +152,21 @@ public class SSDPDiscovery {
                     socket?.close();
                     SSDPDiscoveryLog.info("SSDPDiscovery Socket error during setup: \(error) on interface \(interface ?? "default")")
                 }
+                guard let socket = socket, let message = message, let multicastAddress = multicastAddress else { continue }
+                
+                writeBlocks.append({
+                    do {
+                        try socket.write(from: message, to: multicastAddress)
+                    } catch let error {
+                        socket.close();
+                        SSDPDiscoveryLog.info("SSDPDiscovery Socket error during write: \(error) on interface \(interface ?? "default")")
+                    }
+                })
+
+                sockets.append(socket)
             } // end: for
             
-            if sockets.count == 0 {
+            guard sockets.count > 0 else {
                 // NOTE: this is what gets hit when "Allow appname to find devices on local networks?" iOS popup is showing (user has not made a choice yet).
                 SSDPDiscoveryLog.info("SSDPDiscovery discoverService: no sockets, no-op")
                 DispatchQueue.main.async {
@@ -163,14 +179,25 @@ public class SSDPDiscovery {
                 self.sockets = sockets
             }
             
+            let group = DispatchGroup.init()
+            
             for socket in sockets {
+                group.enter()
                 DispatchQueue.global().async() { // read on concurrent queue, as this can block
+                    group.leave()
                     self.readResponses(socket: socket)
                 }
             }
             
-            DispatchQueue.main.asyncAfter(deadline: .now() + duration) { [weak self] in
-                self?.stop()
+            SSDPDiscoveryLog.info("SSDPDiscovery writing M-SEARCH to \(writeBlocks.count) sockets")
+            group.notify(queue: self.queue) {
+                writeBlocks.forEach { $0() }
+            }
+            
+            if let duration = duration {
+                DispatchQueue.main.asyncAfter(deadline: .now() + duration) { [weak self] in
+                    self?.stop()
+                }
             }
         }
     }
