@@ -97,13 +97,15 @@ public class SSDPDiscovery {
         - Parameters:
             - duration: The amount of time to wait.
             - searchTarget: The type of the searched service.
+            - validatedInterfacesBlock: an optional block that tells you which interfaces were successfully M-SEARCH'd, useful for knowing when showing debug info to the user. This is only called if at least one interface will be M-SEARCH'd.
     */
-    open func discoverService(forDuration duration: TimeInterval?, searchTarget: String = "ssdp:all", port: Int32 = 1900, onInterfaces:[String?] = [nil]) {
+    open func discoverService(forDuration duration: TimeInterval?, searchTarget: String = "ssdp:all", port: Int32 = 1900, onInterfaces:[String?] = [nil], validatedInterfacesBlock: (([String])->Void)? = nil) {
         assert(Thread.current.isMainThread) // sockets access on main thread
         self._stop()
         self.delegate?.ssdpDiscoveryDidStart(self)
         
         var writeBlocks: [() -> Void] = []
+        var validatedInterfaces = [String]()
 
         self.queue.async {
             var sockets = [Socket]()
@@ -163,6 +165,9 @@ public class SSDPDiscovery {
                     }
                 })
 
+                if let interface = interface {
+                    validatedInterfaces.append(interface)
+                }
                 sockets.append(socket)
             } // end: for
             
@@ -177,6 +182,9 @@ public class SSDPDiscovery {
             
             DispatchQueue.main.async { // self.sockets is always read/written on main thread (avoids race conditions)
                 self.sockets = sockets
+                if validatedInterfaces.count > 0 {
+                    validatedInterfacesBlock?(validatedInterfaces)
+                }
             }
             
             let group = DispatchGroup.init()
