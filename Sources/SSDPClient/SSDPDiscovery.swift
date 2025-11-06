@@ -58,7 +58,9 @@ public class SSDPDiscovery {
             let (bytesRead, address) = try socket.readDatagram(into: &data)
             guard
                 let address = address,
-                let (remoteHost, _) = Socket.hostnameAndPort(from: address)
+                let (remoteHost, _) = Socket.hostnameAndPort(from: address),
+                let localAddress = socket.signature?.address,
+                let (localHost, _) = Socket.hostnameAndPort(from: localAddress)
             else {
                 assert(false)
                 SSDPDiscoveryLog.error("SSDPDiscovery readResponses: no address or remoteHost")
@@ -68,8 +70,8 @@ public class SSDPDiscovery {
             if bytesRead > 0 {
                 let response = String(data: data, encoding: .utf8)
                 if let response = response {
-                    SSDPDiscoveryLog.debug("SSDPDiscovery Received from \(remoteHost): \(response.replacingOccurrences(of: "\n", with: "\\n"))")
-                    self.delegate?.ssdpDiscovery(self, didDiscoverService: SSDPService(host: remoteHost, response: response))
+                    SSDPDiscoveryLog.debug("SSDPDiscovery Received from \(remoteHost) on \(localHost): \(response.replacingOccurrences(of: "\n", with: "\\n"))")
+                    self.delegate?.ssdpDiscovery(self, didDiscoverService: SSDPService(host: remoteHost, response: response, localHost: localHost))
                 } else {
                     SSDPDiscoveryLog.debug("SSDPDiscovery Received: got \(bytesRead) bytes but could not make utf8 string, host=\(remoteHost)")
                 }

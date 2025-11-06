@@ -15,6 +15,9 @@ public class SSDPService: CustomStringConvertible {
     public internal(set) var searchTarget: String?
     /// The value of `USN` header
     public internal(set) var uniqueServiceName: String?
+    
+    /// New: we track the local host (IP) as well, so we can reply back on the exact interface if needed
+    public internal(set) var localHost: String
 
     // MARK: Initialisation
 
@@ -24,9 +27,11 @@ public class SSDPService: CustomStringConvertible {
         - Parameters:
             - host: The host of service
             - response: The discovery response.
+            - localHost: the local interface host where discovery was made
     */
-    init(host: String, response: String) {
+    init(host: String, response: String, localHost: String) {
         self.host = host
+        self.localHost = localHost
         
         let headers = self.parse(response)
         self.responseHeaders = headers
