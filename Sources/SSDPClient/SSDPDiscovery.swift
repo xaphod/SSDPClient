@@ -99,14 +99,13 @@ public class SSDPDiscovery {
         - Parameters:
             - duration: The amount of time to wait.
             - searchTarget: The type of the searched service.
-            - interfacesWrittenToBlock: an optional block that tells you which interfaces were successfully M-SEARCH'd, useful for knowing when showing debug info to the user. This is only called if at least one interface will be M-SEARCH'd.
     */
-    open func discoverService(forDuration duration: TimeInterval?, searchTarget: String = "ssdp:all", port: Int32 = 1900, onInterfaces:[String?] = [nil], interfacesWrittenToBlock: (([String])->Void)? = nil) {
+    open func discoverService(forDuration duration: TimeInterval?, searchTarget: String = "ssdp:all", port: Int32 = 1900, onInterfaces:[String?] = [nil]) {
         assert(Thread.current.isMainThread) // sockets access on main thread
         self._stop()
         self.delegate?.ssdpDiscoveryDidStart(self)
         
-        var writeBlocks: [() -> String?] = []
+        var writeBlocks: [() -> Void] = []
 
         self.queue.async {
             var sockets = [Socket]()
@@ -160,11 +159,9 @@ public class SSDPDiscovery {
                 writeBlocks.append({
                     do {
                         try socket.write(from: message, to: multicastAddress)
-                        return interface
                     } catch let error {
                         socket.close();
                         SSDPDiscoveryLog.info("SSDPDiscovery Socket error during write: \(error) on interface \(interface ?? "default")")
-                        return nil
                     }
                 })
 
@@ -196,17 +193,7 @@ public class SSDPDiscovery {
             
             SSDPDiscoveryLog.info("SSDPDiscovery writing M-SEARCH to \(writeBlocks.count) sockets")
             group.notify(queue: self.queue) {
-                var interfacesWritten = [String]()
-                writeBlocks.forEach {
-                    if let interface = $0() {
-                        interfacesWritten.append(interface)
-                    }
-                }
-                if let interfacesWrittenToBlock = interfacesWrittenToBlock, interfacesWritten.count > 0 {
-                    DispatchQueue.main.async {
-                        interfacesWrittenToBlock(interfacesWritten)
-                    }
-                }
+                writeBlocks.forEach { $0() }
             }
             
             if let duration = duration {
