@@ -133,7 +133,26 @@ public class SSDPDiscovery {
                         continue
                     }
                     try socket.listen(on: 0, node: interface)   // node:nil means the default interface, for all others it should be the interface's IP address
-                    
+
+                    // Pin the multicast EGRESS to this socket's interface. Binding (above) only
+                    // sets the source address - on Darwin the egress interface for a multicast
+                    // destination follows the primary interface's multicast route, so without
+                    // this every socket's M-SEARCH leaves via the primary interface (e.g. WiFi)
+                    // and a server reachable only on a secondary interface (direct Ethernet
+                    // cable, 169.254.x) never hears the search. Observed 2026-07-23: iPad on
+                    // WiFi+Ethernet, print server on the Ethernet link only - zero responses.
+                    // IPv4 only: the IPv6 path would need the interface INDEX
+                    // (IPV6_MULTICAST_IF), and those link-local sockets fail setup earlier
+                    // anyway ("Can't assign requested address").
+                    if family == .inet, let interface = interface {
+                        var egress = in_addr()
+                        if inet_pton(AF_INET, interface, &egress) == 1 {
+                            if setsockopt(socket.socketfd, Int32(IPPROTO_IP), IP_MULTICAST_IF, &egress, socklen_t(MemoryLayout<in_addr>.size)) != 0 {
+                                SSDPDiscoveryLog.info("SSDPDiscovery: setsockopt IP_MULTICAST_IF failed (errno \(errno)) on interface \(interface)")
+                            }
+                        }
+                    }
+
                     // Use Multicast (Caution: Gets blocked by iOS 16 unless the app has the multicast entitlement!)
                     message = "M-SEARCH * HTTP/1.1\r\n" +
                     "MAN: \"ssdp:discover\"\r\n" +
